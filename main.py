@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException, Header
 from pydantic import BaseModel
 import joblib
 import json
@@ -14,11 +14,14 @@ model = joblib.load("model/phishing_detector.pkl")
 with open("model/feature_columns.json") as f:
     feature_columns = json.load(f)
 
+# Your API key - share this with your Android team
+API_KEY = "guardian-ai-2026-secure-key"
+
 # Request schema
 class URLRequest(BaseModel):
     url: str
 
-# Feature extractor (same as training)
+# Feature extractor
 def get_entropy(url):
     counts = Counter(url)
     probs = [c / len(url) for c in counts.values()]
@@ -53,7 +56,11 @@ def root():
     return {"message": "Phishing Detector API is running 🚀"}
 
 @app.post("/predict")
-def predict(request: URLRequest):
+def predict(request: URLRequest, x_api_key: str = Header(None)):
+    # Check API key
+    if x_api_key != API_KEY:
+        raise HTTPException(status_code=401, detail="Invalid or missing API key")
+    
     try:
         features = extract_features(request.url)
         values = [[features[col] for col in feature_columns]]
