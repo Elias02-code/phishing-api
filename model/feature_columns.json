@@ -1,0 +1,1 @@
+["url_length", "num_dots", "num_hyphens", "num_slash", "num_special_chars", "has_ip", "has_at_symbol", "has_double_slash", "is_https", "subdomain_depth", "path_length", "num_subdomains", "has_suspicious_word", "entropy", "domain_length"]
