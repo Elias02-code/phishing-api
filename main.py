@@ -15,7 +15,7 @@ with open("model/feature_columns.json") as f:
     feature_columns = json.load(f)
 
 # Your API key - share this with your Android team
-API_KEY = "guardian-ai-2026-secure-key"
+API_KEY = "The-guardian-ai-0205-secure-key"
 
 # Request schema
 class URLRequest(BaseModel):
@@ -53,7 +53,7 @@ def extract_features(url):
 
 @app.get("/")
 def root():
-    return {"message": "Phishing Detector API is running 🚀"}
+    return {"message": "Phishing Detector API is running"}
 
 @app.post("/predict")
 def predict(request: URLRequest, x_api_key: str = Header(None)):
