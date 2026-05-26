@@ -46,7 +46,7 @@ except Exception as e:
     MODEL_LOADED = False
 
 # Your API key - share this with your Android team
-API_KEY = "The-guardian-ai-0205-secure-key"
+API_KEY = "The-01guardian-AI-0205-secured-key"
 
 # Request schema
 class URLRequest(BaseModel):
