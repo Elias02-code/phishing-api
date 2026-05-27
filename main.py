@@ -8,18 +8,8 @@ import math
 from urllib.parse import urlparse
 from collections import Counter
 
-from fastapi.middleware.cors import CORSMiddleware
-
 app = FastAPI(title="Phishing Detector API")
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-# Enable CORS - allows the HTML UI to connect from any origin/website
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -36,7 +26,6 @@ try:
     MODEL_LOADED = True
 except Exception as e:
     print(f"Warning: Could not load model - {e}")
-    print("Running in DEMO mode with mock predictions")
     model = None
     feature_columns = [
         'url_length', 'num_dots', 'num_hyphens', 'num_slash', 'num_special_chars',
@@ -45,9 +34,10 @@ except Exception as e:
     ]
     MODEL_LOADED = False
 
-# Your API key - share this with your Android team
+# API key
 API_KEY = "The-01guardian-AI-0205-secured-key"
-# Whitelist of trusted domains that bypass the model, (this is a simple heuristic to improve performance and reduce false positives for well-known sites)
+
+# Whitelist of trusted domains that bypass the model
 WHITELISTED_DOMAINS = {
     "google.com", "youtube.com", "facebook.com", "instagram.com",
     "twitter.com", "x.com", "whatsapp.com", "linkedin.com",
@@ -58,11 +48,25 @@ WHITELISTED_DOMAINS = {
     "outlook.com", "yahoo.com", "bing.com", "duckduckgo.com",
 }
 
-# Request schema
+# Known brands that phishers commonly impersonate
+PROTECTED_BRANDS = {
+    "paypal", "apple", "icloud", "google", "microsoft", "amazon",
+    "netflix", "facebook", "instagram", "whatsapp", "twitter",
+    "linkedin", "dropbox", "spotify", "ebay", "chase", "wellsfargo",
+    "bankofamerica", "citibank", "dhl", "fedex", "ups", "usps"
+}
+
+def has_brand_impersonation(url: str, root_domain: str) -> bool:
+    """Check if URL contains a brand name but isn't the real domain"""
+    url_lower = url.lower()
+    for brand in PROTECTED_BRANDS:
+        if brand in url_lower and brand not in root_domain:
+            return True
+    return False
+
 class URLRequest(BaseModel):
     url: str
 
-# Feature extractor
 def get_entropy(url):
     if not url:
         return 0.0
@@ -75,23 +79,20 @@ def get_root_domain(url: str) -> str:
     try:
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
-        # Remove www. prefix
         if domain.startswith("www."):
             domain = domain[4:]
-        # Extract last two parts e.g. mail.google.com → google.com
         parts = domain.split(".")
         if len(parts) >= 2:
             return ".".join(parts[-2:])
         return domain
     except:
         return ""
-    
+
 def extract_features(url):
     parsed = urlparse(url)
     domain = parsed.netloc
     path = parsed.path
 
-    # Handle URLs without scheme
     if not domain and path:
         parts = path.split('/')
         domain = parts[0]
@@ -120,9 +121,9 @@ def extract_features(url):
 @app.get("/")
 def root():
     return {
-        "message": "Phishing Detector API is running",
+        "message": "Phishing Detector API is running 🚀",
         "model_loaded": MODEL_LOADED,
-        "version": "2.0.4"
+        "version": "2.0.5"
     }
 
 @app.get("/health")
@@ -139,8 +140,10 @@ def predict(request: URLRequest, x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
-# Check the whitelist domain before running phishing model
+    # Extract root domain
     root_domain = get_root_domain(request.url)
+
+    # Check whitelist first
     if root_domain in WHITELISTED_DOMAINS:
         return {
             "url": request.url,
@@ -149,25 +152,21 @@ def predict(request: URLRequest, x_api_key: str = Header(None)):
             "phishing_probability": 0.0,
             "note": "Domain is whitelisted as trusted"
         }
-    
-    # Check for brand impersonation - if the URL contains a well-known brand name but is not the official domain,
-    # flag it as phishing 
-    # (this is a simple heuristic to catch common impersonation attempts)
-if has_brand_impersonation(request.url, root_domain):
-    return {
-        "url": request.url,
-        "prediction": "phishing",
-        "confidence": 95.0,
-        "phishing_probability": 95.0,
-        "note": "Possible brand impersonation detected"
-    }
+
+    # Check for brand impersonation
+    if has_brand_impersonation(request.url, root_domain):
+        return {
+            "url": request.url,
+            "prediction": "phishing",
+            "confidence": 95.0,
+            "phishing_probability": 95.0,
+            "note": "Possible brand impersonation detected"
+        }
 
     try:
         features = extract_features(request.url)
 
-        # If model is not loaded, use heuristic-based demo prediction
         if not MODEL_LOADED:
-            # Simple heuristic for demo mode
             score = 0
             if features['has_ip']: score += 30
             if features['has_at_symbol']: score += 25
@@ -185,8 +184,7 @@ if has_brand_impersonation(request.url, root_domain):
                 "prediction": "phishing" if prediction == 1 else "legitimate",
                 "confidence": round(max(prob_phishing, prob_legit) * 100, 2),
                 "phishing_probability": round(prob_phishing * 100, 2),
-                "mode": "demo",
-                "features": features
+                "mode": "demo"
             }
 
         values = [[features[col] for col in feature_columns]]
@@ -198,8 +196,7 @@ if has_brand_impersonation(request.url, root_domain):
             "prediction": "phishing" if prediction == 1 else "legitimate",
             "confidence": round(float(max(probability)) * 100, 2),
             "phishing_probability": round(float(probability[1]) * 100, 2),
-            "mode": "production",
-            "features": features
+            "mode": "production"
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
