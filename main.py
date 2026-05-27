@@ -47,6 +47,16 @@ except Exception as e:
 
 # Your API key - share this with your Android team
 API_KEY = "The-01guardian-AI-0205-secured-key"
+# Whitelist of trusted domains that bypass the model, (this is a simple heuristic to improve performance and reduce false positives for well-known sites)
+WHITELISTED_DOMAINS = {
+    "google.com", "youtube.com", "facebook.com", "instagram.com",
+    "twitter.com", "x.com", "whatsapp.com", "linkedin.com",
+    "microsoft.com", "apple.com", "amazon.com", "wikipedia.org",
+    "github.com", "stackoverflow.com", "reddit.com", "netflix.com",
+    "spotify.com", "paypal.com", "zoom.us", "slack.com",
+    "dropbox.com", "onedrive.com", "drive.google.com", "gmail.com",
+    "outlook.com", "yahoo.com", "bing.com", "duckduckgo.com",
+}
 
 # Request schema
 class URLRequest(BaseModel):
@@ -60,6 +70,22 @@ def get_entropy(url):
     probs = [c / len(url) for c in counts.values()]
     return -sum(p * math.log2(p) for p in probs)
 
+def get_root_domain(url: str) -> str:
+    """Extract root domain from URL e.g. mail.google.com → google.com"""
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        # Remove www. prefix
+        if domain.startswith("www."):
+            domain = domain[4:]
+        # Extract last two parts e.g. mail.google.com → google.com
+        parts = domain.split(".")
+        if len(parts) >= 2:
+            return ".".join(parts[-2:])
+        return domain
+    except:
+        return ""
+    
 def extract_features(url):
     parsed = urlparse(url)
     domain = parsed.netloc
@@ -113,6 +139,17 @@ def predict(request: URLRequest, x_api_key: str = Header(None)):
     if x_api_key != API_KEY:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
+# Check the whitelist domain before running phishing model
+    root_domain = get_root_domain(request.url)
+    if root_domain in WHITELISTED_DOMAINS:
+        return {
+            "url": request.url,
+            "prediction": "legitimate",
+            "confidence": 100.0,
+            "phishing_probability": 0.0,
+            "note": "Domain is whitelisted as trusted"
+        }
+    
     try:
         features = extract_features(request.url)
 
