@@ -150,6 +150,18 @@ def predict(request: URLRequest, x_api_key: str = Header(None)):
             "note": "Domain is whitelisted as trusted"
         }
     
+    # Check for brand impersonation - if the URL contains a well-known brand name but is not the official domain,
+    # flag it as phishing 
+    # (this is a simple heuristic to catch common impersonation attempts)
+if has_brand_impersonation(request.url, root_domain):
+    return {
+        "url": request.url,
+        "prediction": "phishing",
+        "confidence": 95.0,
+        "phishing_probability": 95.0,
+        "note": "Possible brand impersonation detected"
+    }
+
     try:
         features = extract_features(request.url)
 
