@@ -1,15 +1,24 @@
-from fastapi import FastAPI, HTTPException, Header
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from pydantic import BaseModel, Field
 import joblib
 import json
 import re
 import math
 import os
+import ipaddress
+import socket
 from urllib.parse import urlparse
 from collections import Counter
 
 app = FastAPI(title="Phishing Detector API")
+
+limiter = Limiter(key_func=get_remote_address)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 app.add_middleware(
     CORSMiddleware,
@@ -35,8 +44,6 @@ except Exception as e:
     ]
     MODEL_LOADED = False
 
-# API key
-
 # Whitelist of trusted domains that bypass the model
 WHITELISTED_DOMAINS = {
     "google.com", "youtube.com", "facebook.com", "instagram.com",
@@ -57,7 +64,6 @@ PROTECTED_BRANDS = {
 }
 
 def has_brand_impersonation(url: str, root_domain: str) -> bool:
-    """Check if URL contains a brand name but isn't the real domain"""
     url_lower = url.lower()
     for brand in PROTECTED_BRANDS:
         if brand in url_lower and brand not in root_domain:
@@ -65,7 +71,7 @@ def has_brand_impersonation(url: str, root_domain: str) -> bool:
     return False
 
 class URLRequest(BaseModel):
-    url: str
+    url: str = Field(..., max_length=2048)
 
 def get_entropy(url):
     if not url:
@@ -75,7 +81,6 @@ def get_entropy(url):
     return -sum(p * math.log2(p) for p in probs)
 
 def get_root_domain(url: str) -> str:
-    """Extract root domain from URL e.g. mail.google.com → google.com"""
     try:
         parsed = urlparse(url)
         domain = parsed.netloc.lower()
@@ -88,16 +93,35 @@ def get_root_domain(url: str) -> str:
     except:
         return ""
 
+def is_safe_url(url: str) -> bool:
+    """Block SSRF — rejects localhost, private IPs, non-HTTP schemes"""
+    try:
+        parsed = urlparse(url)
+        if parsed.scheme not in ('http', 'https'):
+            return False
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+        if hostname in ('localhost', '::1'):
+            return False
+        try:
+            ip = ipaddress.ip_address(socket.gethostbyname(hostname))
+            if ip.is_private or ip.is_loopback or ip.is_reserved or ip.is_link_local:
+                return False
+        except (socket.gaierror, ValueError):
+            pass
+        return True
+    except Exception:
+        return False
+
 def extract_features(url):
     parsed = urlparse(url)
     domain = parsed.netloc
     path = parsed.path
-
     if not domain and path:
         parts = path.split('/')
         domain = parts[0]
         path = '/' + '/'.join(parts[1:]) if len(parts) > 1 else ''
-
     return {
         'url_length': len(url),
         'num_dots': url.count('.'),
@@ -123,7 +147,7 @@ def root():
     return {
         "message": "Phishing Detector API is running 🚀",
         "model_loaded": MODEL_LOADED,
-        "version": "2.0.5"
+        "version": "2.0.6"
     }
 
 @app.get("/health")
@@ -135,25 +159,25 @@ def health_check():
     }
 
 @app.post("/predict")
-def predict(request: URLRequest):
+@limiter.limit("5/minute")
+def predict(request: Request, url_request: URLRequest):
+    if not is_safe_url(url_request.url):
+        raise HTTPException(status_code=400, detail="URL not allowed")
 
-    # Extract root domain
-    root_domain = get_root_domain(request.url)
+    root_domain = get_root_domain(url_request.url)
 
-    # Check whitelist first
     if root_domain in WHITELISTED_DOMAINS:
         return {
-            "url": request.url,
+            "url": url_request.url,
             "prediction": "legitimate",
             "confidence": 100.0,
             "phishing_probability": 0.0,
             "note": "Domain is whitelisted as trusted"
         }
 
-    # Check for brand impersonation
-    if has_brand_impersonation(request.url, root_domain):
+    if has_brand_impersonation(url_request.url, root_domain):
         return {
-            "url": request.url,
+            "url": url_request.url,
             "prediction": "phishing",
             "confidence": 95.0,
             "phishing_probability": 95.0,
@@ -161,8 +185,7 @@ def predict(request: URLRequest):
         }
 
     try:
-        features = extract_features(request.url)
-
+        features = extract_features(url_request.url)
         if not MODEL_LOADED:
             score = 0
             if features['has_ip']: score += 30
@@ -171,25 +194,21 @@ def predict(request: URLRequest):
             if features['num_dots'] > 3: score += 10
             if features['subdomain_depth'] > 1: score += 10
             if features['entropy'] > 4.5: score += 5
-
             prediction = 1 if score > 40 else 0
             prob_phishing = min(score / 100, 0.99)
             prob_legit = 1 - prob_phishing
-
             return {
-                "url": request.url,
+                "url": url_request.url,
                 "prediction": "phishing" if prediction == 1 else "legitimate",
                 "confidence": round(max(prob_phishing, prob_legit) * 100, 2),
                 "phishing_probability": round(prob_phishing * 100, 2),
                 "mode": "demo"
             }
-
         values = [[features[col] for col in feature_columns]]
         prediction = model.predict(values)[0]
         probability = model.predict_proba(values)[0]
-
         return {
-            "url": request.url,
+            "url": url_request.url,
             "prediction": "phishing" if prediction == 1 else "legitimate",
             "confidence": round(float(max(probability)) * 100, 2),
             "phishing_probability": round(float(probability[1]) * 100, 2),
